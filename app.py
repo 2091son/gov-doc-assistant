@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime
 from docx import Document
 from io import BytesIO
+from rag import search_knowledge, load_knowledge
 
 load_dotenv()
 
@@ -35,17 +36,29 @@ def init_db():
 
 init_db()
 
-# 首页
+# 启动时加载知识库
+load_knowledge()
+
+# ==================== 首页 ====================
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# ===== 原来的生成路由（保留，但两步生成模式会改用新的） =====
+
+# ==================== 一步生成（带 RAG + 流式） ====================
 @app.route('/generate', methods=['POST'])
 def generate():
     topic = request.form.get('topic')
     doc_type = request.form.get('doc_type')
     style = request.form.get('style')
+
+    # RAG：搜索知识库
+    docs = search_knowledge(topic)
+    reference = ""
+    if docs:
+        reference = "请参考以下公文范例：\n\n"
+        for i, doc in enumerate(docs):
+            reference += f"【参考案例 {i+1}】\n{doc['content'][:600]}\n\n"
 
     prompt = f"""
 你是一位资深公文写作专家。请根据以下要求写一篇公文：
@@ -53,6 +66,8 @@ def generate():
 主题：{topic}
 文种：{doc_type}
 风格：{style}
+
+{reference}
 
 要求：
 1. 格式规范，符合公文写作标准
@@ -91,7 +106,7 @@ def generate():
     return Response(generate_stream(), mimetype='text/event-stream')
 
 
-# ===== 新增：生成大纲（两步模式第一步） =====
+# ==================== 生成大纲（两步模式第一步，不带 RAG 显示） ====================
 @app.route('/outline', methods=['POST'])
 def generate_outline():
     topic = request.form.get('topic')
@@ -131,13 +146,21 @@ def generate_outline():
     return Response(generate_stream(), mimetype='text/event-stream')
 
 
-# ===== 新增：基于大纲生成全文（两步模式第二步） =====
+# ==================== 基于大纲生成全文（两步模式第二步，带 RAG） ====================
 @app.route('/generate_full', methods=['POST'])
 def generate_full():
     topic = request.form.get('topic')
     doc_type = request.form.get('doc_type')
     style = request.form.get('style')
     outline = request.form.get('outline')
+
+    # RAG：搜索知识库
+    docs = search_knowledge(topic)
+    reference = ""
+    if docs:
+        reference = "请参考以下公文范例：\n\n"
+        for i, doc in enumerate(docs):
+            reference += f"【参考案例 {i+1}】\n{doc['content'][:600]}\n\n"
 
     prompt = f"""
 你是一位资深公文写作专家。用户确认了以下大纲，请根据大纲扩写成一篇完整的公文。
@@ -148,6 +171,8 @@ def generate_full():
 
 用户确认的大纲：
 {outline}
+
+{reference}
 
 要求：
 1. 严格按照大纲结构扩写
@@ -186,7 +211,7 @@ def generate_full():
     return Response(generate_stream(), mimetype='text/event-stream')
 
 
-# ===== 历史记录相关 =====
+# ==================== 历史记录相关 ====================
 @app.route('/history', methods=['GET'])
 def history():
     conn = sqlite3.connect('history.db')
