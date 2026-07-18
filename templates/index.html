@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>公文写作助手</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f7fa;
+    }
+
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      color: #1a3c5e;
+      border-bottom: 3px solid #2b7a8a;
+      padding-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      margin-top: 18px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      margin-top: 6px;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      font-size: 15px;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      height: 80px;
+      resize: vertical;
+    }
+
+    button {
+      margin-top: 24px;
+      background: #2b7a8a;
+      color: white;
+      border: none;
+      padding: 12px 28px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover {
+      background: #1e5f6b;
+    }
+
+    #result {
+      margin-top: 30px;
+      padding: 20px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border-left: 4px solid #2b7a8a;
+      white-space: pre-wrap;
+      display: none;
+    }
+
+    .loading {
+      color: #2b7a8a;
+      margin-top: 16px;
+      font-weight: 500;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="container">
+    <h1>📄 公文写作助手</h1>
+    <p style="color: #666; margin-bottom: 24px;">输入主题，AI 自动生成规范公文</p>
+
+    <form id="docForm">
+      <label for="topic">✏️ 主题</label>
+      <input type="text" id="topic" placeholder="例如：关于推进垃圾分类工作的通知" required>
+
+      <label for="doc_type">📂 文种</label>
+      <select id="doc_type">
+        <option value="通知">通知</option>
+        <option value="报告">报告</option>
+        <option value="讲话稿">讲话稿</option>
+        <option value="请示">请示</option>
+        <option value="批复">批复</option>
+      </select>
+
+      <label for="style">🎨 风格</label>
+      <select id="style">
+        <option value="正式">正式（机关公文标准）</option>
+        <option value="亲民">亲民（通俗易懂）</option>
+        <option value="简洁">简洁（言简意赅）</option>
+      </select>
+
+      <button type="submit">🚀 生成文章</button>
+    </form>
+
+    <div class="loading" id="loading">⏳ AI 正在写作中，请稍候...</div>
+
+    <div id="result"></div>
+  </div>
+
+  <script>
+    document.getElementById('docForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+
+      const topic = document.getElementById('topic').value;
+      const doc_type = document.getElementById('doc_type').value;
+      const style = document.getElementById('style').value;
+
+      const loading = document.getElementById('loading');
+      const resultDiv = document.getElementById('result');
+
+      // 显示加载动画
+      loading.style.display = 'block';
+      resultDiv.style.display = 'none';
+      resultDiv.textContent = '';
+
+      try {
+        const formData = new FormData();
+        formData.append('topic', topic);
+        formData.append('doc_type', doc_type);
+        formData.append('style', style);
+
+        const response = await fetch('/generate', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+
+        loading.style.display = 'none';
+        resultDiv.style.display = 'block';
+        resultDiv.textContent = data.result;
+
+      } catch (error) {
+        loading.style.display = 'none';
+        alert('生成失败，请检查网络连接或重试。');
+        console.error(error);
+      }
+    });
+  </script>
+
+</body>
+
+</html>
