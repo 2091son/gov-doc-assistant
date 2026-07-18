@@ -1,36 +1,52 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, Response, jsonify
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+import sqlite3
+from datetime import datetime
+from docx import Document
+from io import BytesIO
 
-# 加载 .env 文件
 load_dotenv()
 
-# 创建 Flask 应用
 app = Flask(__name__)
 
-# 创建 OpenAI 客户端 - 直接写死 Key（测试用）
 client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL")
+    api_key="sk-13a99e5a475f4105b3dd0edcebbd40fc",
+    base_url="https://api.deepseek.com/v1"
 )
 
-# 首页路由
+# 初始化数据库
+def init_db():
+    conn = sqlite3.connect('history.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic TEXT,
+            doc_type TEXT,
+            style TEXT,
+            content TEXT,
+            created_at TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# 首页
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# 生成文章路由
+# ===== 原来的生成路由（保留，但两步生成模式会改用新的） =====
 @app.route('/generate', methods=['POST'])
 def generate():
-    # 获取用户提交的数据
     topic = request.form.get('topic')
     doc_type = request.form.get('doc_type')
     style = request.form.get('style')
 
-    print(f"收到请求: topic={topic}, doc_type={doc_type}, style={style}")
-
-    # 构建 Prompt
     prompt = f"""
 你是一位资深公文写作专家。请根据以下要求写一篇公文：
 
@@ -44,22 +60,205 @@ def generate():
 3. 结构清晰，有标题、正文、落款
     """
 
-    # 调用 AI
     response = client.chat.completions.create(
         model="deepseek-chat",
         messages=[
             {"role": "system", "content": "你是一位资深的公文写作专家。"},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.7
+        temperature=0.7,
+        stream=True
     )
 
-    # 获取 AI 生成的文本
-    result = response.choices[0].message.content
+    def generate_stream():
+        full_content = ""
+        for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                full_content += content
+                yield f"data: {content}\n\n"
 
-    # 返回 JSON 给前端
-    return jsonify({'result': result})
+        conn = sqlite3.connect('history.db')
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO records (topic, doc_type, style, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (topic, doc_type, style, full_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+        conn.close()
+        yield "data: [DONE]\n\n"
 
-# 启动服务器
+    return Response(generate_stream(), mimetype='text/event-stream')
+
+
+# ===== 新增：生成大纲（两步模式第一步） =====
+@app.route('/outline', methods=['POST'])
+def generate_outline():
+    topic = request.form.get('topic')
+    doc_type = request.form.get('doc_type')
+    style = request.form.get('style')
+
+    prompt = f"""
+你是一位资深公文写作专家。请根据以下要求，先写一份大纲：
+
+主题：{topic}
+文种：{doc_type}
+风格：{style}
+
+要求：
+1. 大纲要清晰，列出标题、正文要点、结尾
+2. 每个要点用一句话概括
+3. 只输出大纲，不要写全文
+    """
+
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "system", "content": "你是一位资深的公文写作专家。"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.7,
+        stream=True
+    )
+
+    def generate_stream():
+        for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield f"data: {content}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return Response(generate_stream(), mimetype='text/event-stream')
+
+
+# ===== 新增：基于大纲生成全文（两步模式第二步） =====
+@app.route('/generate_full', methods=['POST'])
+def generate_full():
+    topic = request.form.get('topic')
+    doc_type = request.form.get('doc_type')
+    style = request.form.get('style')
+    outline = request.form.get('outline')
+
+    prompt = f"""
+你是一位资深公文写作专家。用户确认了以下大纲，请根据大纲扩写成一篇完整的公文。
+
+主题：{topic}
+文种：{doc_type}
+风格：{style}
+
+用户确认的大纲：
+{outline}
+
+要求：
+1. 严格按照大纲结构扩写
+2. 语言得体，符合所选风格
+3. 格式规范，有标题、正文、落款
+    """
+
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "system", "content": "你是一位资深的公文写作专家。"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.7,
+        stream=True
+    )
+
+    def generate_stream():
+        full_content = ""
+        for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                full_content += content
+                yield f"data: {content}\n\n"
+
+        conn = sqlite3.connect('history.db')
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO records (topic, doc_type, style, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (topic, doc_type, style, full_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+        conn.close()
+        yield "data: [DONE]\n\n"
+
+    return Response(generate_stream(), mimetype='text/event-stream')
+
+
+# ===== 历史记录相关 =====
+@app.route('/history', methods=['GET'])
+def history():
+    conn = sqlite3.connect('history.db')
+    c = conn.cursor()
+    c.execute("SELECT id, topic, doc_type, style, created_at FROM records ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    history_list = []
+    for row in rows:
+        history_list.append({
+            'id': row[0],
+            'topic': row[1],
+            'doc_type': row[2],
+            'style': row[3],
+            'created_at': row[4]
+        })
+    return jsonify(history_list)
+
+
+@app.route('/delete/<int:record_id>', methods=['DELETE'])
+def delete_record(record_id):
+    conn = sqlite3.connect('history.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM records WHERE id = ?", (record_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/record/<int:record_id>', methods=['GET'])
+def get_record(record_id):
+    conn = sqlite3.connect('history.db')
+    c = conn.cursor()
+    c.execute("SELECT content FROM records WHERE id = ?", (record_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return jsonify({'content': row[0]})
+    return jsonify({'content': ''})
+
+
+@app.route('/export/<int:record_id>', methods=['GET'])
+def export_word(record_id):
+    conn = sqlite3.connect('history.db')
+    c = conn.cursor()
+    c.execute("SELECT topic, content FROM records WHERE id = ?", (record_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return "记录不存在", 404
+
+    topic = row[0]
+    content = row[1]
+
+    doc = Document()
+    doc.add_heading(topic, 0)
+    doc.add_paragraph(content)
+
+    file_stream = BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+
+    return Response(
+        file_stream,
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        headers={
+            'Content-Disposition': 'attachment; filename=doc.docx'
+        }
+    )
+
+
 if __name__ == '__main__':
     app.run(debug=True)
